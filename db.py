@@ -57,6 +57,12 @@ def init_db():
             question TEXT,
             answer TEXT
         )""")
+        
+        # ensure 'keywords' column exists (idempotent)
+        c.execute("PRAGMA table_info(faq)")
+        cols = [r["name"] for r in c.fetchall()]
+        if "keywords" not in cols:
+            c.execute("ALTER TABLE faq ADD COLUMN keywords TEXT")
 
         # Seed a couple of FAQs if empty
         c.execute("SELECT COUNT(*) as n FROM faq")
