@@ -1,0 +1,2 @@
+-- to do any operation in the database, this file can be used
+-- DELETE FROM tickets WHERE id = 11;

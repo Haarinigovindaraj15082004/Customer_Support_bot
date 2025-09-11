@@ -1,8 +1,11 @@
+# gmail_ack.py
 import base64
 import email
+import os
 import time
 from typing import Optional
-import os
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -11,27 +14,25 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 
 from config import settings
-from agent import detect_intent
-from ticketing import get_or_create_customer, create_ticket
+from agent import detect_intent, answer_faq_from_db, infer_issue_label_from_text
+from ticketing import get_or_create_customer, create_ticket, set_ticket_email_meta
 
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/gmail.send",
 ]
 
+
 def gmail_service():
     """
-    Uses a JSON token file (settings.GOOGLE_TOKEN_JSON) instead of pickle.
-    Creates/refreshes it on first run after OAuth.
+    Auth using JSON token at settings.GOOGLE_TOKEN_JSON (created on first run).
     """
     creds = None
     token_path = settings.GOOGLE_TOKEN_JSON
 
-    # Load existing token if present
     if os.path.exists(token_path):
         creds = Credentials.from_authorized_user_file(token_path, SCOPES)
 
-    # Refresh or run OAuth
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             try:
@@ -44,34 +45,37 @@ def gmail_service():
             )
             creds = flow.run_local_server(port=0)
 
-        # Save the token as JSON
         with open(token_path, "w", encoding="utf-8") as f:
             f.write(creds.to_json())
 
     return build("gmail", "v1", credentials=creds)
 
+
 def _parse_email(msg) -> tuple[str, str, str]:
     """
-    Returns (from_email_header, subject, body_text)
+    Returns (from_header, subject, body_text)
     """
     headers = {h["name"].lower(): h["value"] for h in msg["payload"].get("headers", [])}
-    from_email = headers.get("from", "unknown")
+    from_header = headers.get("from", "unknown")
     subject = headers.get("subject", "(no subject)")
 
     body_text = "(no body)"
-    if "parts" in msg["payload"]:
-        for part in msg["payload"]["parts"]:
+    payload = msg.get("payload", {})
+    if "parts" in payload:
+        # try find a text/plain part
+        for part in payload["parts"]:
             if part.get("mimeType") == "text/plain":
                 data = part["body"].get("data")
                 if data:
                     body_text = base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
                     break
     else:
-        data = msg["payload"]["body"].get("data")
+        data = payload.get("body", {}).get("data")
         if data:
             body_text = base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
 
-    return from_email, subject, body_text
+    return from_header, subject, body_text
+
 
 def send_acknowledgment(service, to_email: str, ticket_id: int, order_id: Optional[str]):
     subject = f"[Ticket #{ticket_id}] We’ve received your request"
@@ -81,21 +85,21 @@ def send_acknowledgment(service, to_email: str, ticket_id: int, order_id: Option
         "Our support team will follow up shortly.\n\nRegards,\nSupport"
     )
 
-    message = email.message.EmailMessage()
-    message["To"] = to_email
-    # SAFER: only set From if you’ve configured SUPPORT_FROM_EMAIL; otherwise let Gmail use the authenticated account.
-    if settings.SUPPORT_FROM_EMAIL:
-        message["From"] = settings.SUPPORT_FROM_EMAIL
-    message["Subject"] = subject
-    message.set_content(body)
+    msg = email.message.EmailMessage()
+    msg["To"] = to_email
+    if settings.SUPPORT_FROM_EMAIL:            # let Gmail set the From if not configured
+        msg["From"] = settings.SUPPORT_FROM_EMAIL
+    msg["Subject"] = subject
+    msg.set_content(body)
 
-    encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
-    service.users().messages().send(userId="me", body={"raw": encoded_message}).execute()
+    encoded = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+    service.users().messages().send(userId="me", body={"raw": encoded}).execute()
+
 
 def poll_and_ack():
     """
-    Poll unread emails, create tickets automatically, and send acknowledgments.
-    Marks processed messages as read.
+    Poll unread emails, classify, create a ticket with specific issue_type,
+    send acknowledgment, save email metadata on the ticket, mark as read.
     """
     service = gmail_service()
     print("Gmail worker running… (Ctrl+C to stop)")
@@ -115,32 +119,60 @@ def poll_and_ack():
                 continue
 
             for m in messages:
-                full = service.users().messages().get(userId="me", id=m["id"], format="full").execute()
+                full = service.users().messages().get(
+                    userId="me", id=m["id"], format="full"
+                ).execute()
 
+                # basic fields
                 from_header, subject, body_text = _parse_email(full)
-                # Extract plain email from "Name <addr>"
                 from_addr = from_header.split("<")[-1].rstrip(">").strip()
+                was_unread = "UNREAD" in full.get("labelIds", [])
 
-                intent = detect_intent(subject + "\n" + body_text)
+                # classify the email text
+                text = f"{subject}\n{body_text}"
+                intent = detect_intent(text)
 
+                # choose issue_type (avoid generic "other" if we can label it)
+                if intent.type == "defect":
+                    issue_type = "defective_item"
+                elif intent.type == "wrong_item":
+                    issue_type = "wrong_item"
+                elif intent.type == "missing_item":
+                    issue_type = "missing_item"
+                else:
+                    match = answer_faq_from_db(text)  # -> (answer, label) or None
+                    if match:
+                        _, issue_type = match
+                    else:
+                        issue_type = infer_issue_label_from_text(text)
+
+                # create / link customer and ticket
                 customer_id = get_or_create_customer(email=from_addr)
-                issue_type = (
-                    "defective_item" if intent.type == "defect"
-                    else "wrong_item" if intent.type == "wrong_item"
-                    else "other"
-                )
-
                 ticket_id = create_ticket(
                     customer_id=customer_id,
-                    order_id=intent.order_id,
-                    issue_type=issue_type,
-                    first_msg=(subject + "\n\n" + body_text)[:1000]
+                    order_id=intent.order_id,                         # may be None
+                    issue_type=issue_type,                            # e.g., "payment issues"
+                    first_msg=(subject + "\n\n" + body_text)[:1000],  # or body_text[:500]
+                    source="email"
                 )
 
-                # Send acknowledgment
+                # send ack
                 send_acknowledgment(service, from_addr, ticket_id, intent.order_id)
 
-                # Mark as read
+                # save email metadata on the ticket
+                now_ist = datetime.now(ZoneInfo("Asia/Kolkata")).isoformat(timespec="seconds")
+                set_ticket_email_meta(
+                ticket_id,
+                source="email",
+                gmail_message_id=m["id"],
+                email_from=from_addr,
+                email_subject=subject,
+                email_fetched_utc=now_ist,   
+                email_ack_sent_utc=now_ist, 
+                gmail_was_unread=1 if was_unread else 0
+                )
+
+                # mark as read
                 service.users().messages().modify(
                     userId="me",
                     id=m["id"],
@@ -155,6 +187,7 @@ def poll_and_ack():
         except Exception as e:
             print("Worker error:", e)
             time.sleep(10)
+
 
 if __name__ == "__main__":
     poll_and_ack()

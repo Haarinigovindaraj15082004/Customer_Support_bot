@@ -269,9 +269,11 @@ def chat_turn(session_id: str, user_text: str, email: str | None = None, name: s
             ticket_id = create_ticket(
                 customer_id=customer_id,
                 order_id=order_id,
-                issue_type=issue_type,
-                first_msg=first_msg
+                issue_type=issue_type,      # from pending["issue_type"]
+                first_msg=first_msg,        # from pending["first_msg"]
+                source="chat"
             )
+
             facts.pop("pending_ticket_offer", None)
             reply = (
                 f"Thanks! I’ve created ticket #{ticket_id} for Order {order_id}. "
@@ -345,11 +347,13 @@ def chat_turn(session_id: str, user_text: str, email: str | None = None, name: s
 
         # Create a new ticket
         ticket_id = create_ticket(
-            customer_id=customer_id,
-            order_id=order_id,
-            issue_type=issue_type,
-            first_msg=user_text
+        customer_id=customer_id,
+        order_id=order_id,
+        issue_type=issue_type,
+        first_msg=user_text,
+        source="chat"
         )
+
         reply = (
             f"Thanks! I’ve created ticket #{ticket_id} for Order {order_id}. "
             f"Our team will reach out with next steps."

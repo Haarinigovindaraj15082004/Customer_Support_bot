@@ -38,6 +38,22 @@ def init_db():
             last_message TEXT,
             FOREIGN KEY (customer_id) REFERENCES customers(id)
         )""")
+        
+        # --- add email metadata columns if missing ---
+        c.execute("PRAGMA table_info(tickets)")
+        tcols = {r["name"] for r in c.fetchall()}
+        def add(col, sql_type):
+            if col not in tcols:
+                c.execute(f"ALTER TABLE tickets ADD COLUMN {col} {sql_type}")
+
+        add("source", "TEXT")                 # 'email' or 'chat'
+        add("gmail_message_id", "TEXT")       # Gmail msg id we processed
+        add("email_from", "TEXT")
+        add("email_subject", "TEXT")
+        add("email_fetched_utc", "TEXT")      # when worker fetched the mail
+        add("email_ack_sent_utc", "TEXT")     # when we sent the ack
+        add("gmail_was_unread", "INTEGER")    # 1/0 (it was unread when fetched)
+
 
         # Simple chat transcripts
         c.execute("""
