@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     # Gmail: OAuth client secrets json & token storage
     GOOGLE_CLIENT_SECRETS_FILE: str = "client_secret.json"
     GOOGLE_TOKEN_JSON: str = "gmail_token.json"
-    SUPPORT_FROM_EMAIL: Optional[str] = None  # e.g., "support@yourshop.com"
+    SUPPORT_FROM_EMAIL: Optional[str] = None  
 
     # Polling
     GMAIL_POLL_QUERY: str = 'is:unread -category:promotions'

@@ -3,6 +3,6 @@ from typing import Optional
 
 @dataclass
 class DetectedIntent:
-    type: str                   # 'defect', 'wrong_item', 'faq', 'fallback'
-    order_id: Optional[str]     # extracted via regex if present
+    type: str                  
+    order_id: Optional[str]    
     issue_summary: Optional[str]

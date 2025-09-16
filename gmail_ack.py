@@ -1,4 +1,3 @@
-# gmail_ack.py
 import base64
 import email
 import os
@@ -62,7 +61,7 @@ def _parse_email(msg) -> tuple[str, str, str]:
     body_text = "(no body)"
     payload = msg.get("payload", {})
     if "parts" in payload:
-        # try find a text/plain part
+        # try find a text
         for part in payload["parts"]:
             if part.get("mimeType") == "text/plain":
                 data = part["body"].get("data")
@@ -87,7 +86,7 @@ def send_acknowledgment(service, to_email: str, ticket_id: int, order_id: Option
 
     msg = email.message.EmailMessage()
     msg["To"] = to_email
-    if settings.SUPPORT_FROM_EMAIL:            # let Gmail set the From if not configured
+    if settings.SUPPORT_FROM_EMAIL:           
         msg["From"] = settings.SUPPORT_FROM_EMAIL
     msg["Subject"] = subject
     msg.set_content(body)
@@ -132,7 +131,7 @@ def poll_and_ack():
                 text = f"{subject}\n{body_text}"
                 intent = detect_intent(text)
 
-                # choose issue_type (avoid generic "other" if we can label it)
+                # choose issue_type 
                 if intent.type == "defect":
                     issue_type = "defective_item"
                 elif intent.type == "wrong_item":
@@ -140,7 +139,7 @@ def poll_and_ack():
                 elif intent.type == "missing_item":
                     issue_type = "missing_item"
                 else:
-                    match = answer_faq_from_db(text)  # -> (answer, label) or None
+                    match = answer_faq_from_db(text)  
                     if match:
                         _, issue_type = match
                     else:
@@ -150,9 +149,9 @@ def poll_and_ack():
                 customer_id = get_or_create_customer(email=from_addr)
                 ticket_id = create_ticket(
                     customer_id=customer_id,
-                    order_id=intent.order_id,                         # may be None
-                    issue_type=issue_type,                            # e.g., "payment issues"
-                    first_msg=(subject + "\n\n" + body_text)[:1000],  # or body_text[:500]
+                    order_id=intent.order_id,                        
+                    issue_type=issue_type,                            
+                    first_msg=(subject + "\n\n" + body_text)[:1000],
                     source="email"
                 )
 

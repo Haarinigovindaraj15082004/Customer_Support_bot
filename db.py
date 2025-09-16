@@ -46,13 +46,13 @@ def init_db():
             if col not in tcols:
                 c.execute(f"ALTER TABLE tickets ADD COLUMN {col} {sql_type}")
 
-        add("source", "TEXT")                 # 'email' or 'chat'
-        add("gmail_message_id", "TEXT")       # Gmail msg id we processed
+        add("source", "TEXT")                 
+        add("gmail_message_id", "TEXT")       
         add("email_from", "TEXT")
         add("email_subject", "TEXT")
-        add("email_fetched_utc", "TEXT")      # when worker fetched the mail
-        add("email_ack_sent_utc", "TEXT")     # when we sent the ack
-        add("gmail_was_unread", "INTEGER")    # 1/0 (it was unread when fetched)
+        add("email_fetched_utc", "TEXT")      
+        add("email_ack_sent_utc", "TEXT")     
+        add("gmail_was_unread", "INTEGER")    
 
 
         # Simple chat transcripts
@@ -66,7 +66,7 @@ def init_db():
             FOREIGN KEY (ticket_id) REFERENCES tickets(id)
         )""")
 
-        # Lightweight FAQ for rule-based answers (no RAG)
+        # Lightweight FAQ for rule-based answers 
         c.execute("""
         CREATE TABLE IF NOT EXISTS faq (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,7 +74,7 @@ def init_db():
             answer TEXT
         )""")
         
-        # ensure 'keywords' column exists (idempotent)
+        # ensure 'keywords' column exists 
         c.execute("PRAGMA table_info(faq)")
         cols = [r["name"] for r in c.fetchall()]
         if "keywords" not in cols:

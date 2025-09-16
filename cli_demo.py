@@ -4,7 +4,7 @@ from agent import chat_turn
 def main():
     init_db()
     print("Cassie chat demo. Type 'quit' to exit.\n")
-    session_id = "local_demo_session"   # in real life, this could be a socket id or user id
+    session_id = "local_demo_session"   
 
     while True:
         user = input("you: ")

@@ -10,7 +10,7 @@ from ticketing import (
 from db import get_conn
 
 # -----------------------------
-# Session cache (very light)
+# Session cache 
 # -----------------------------
 SESSION_CACHE: Dict[str, Dict] = {}
 
@@ -38,7 +38,7 @@ def _is_no(text: str) -> bool:
     return any(tok in t for tok in NO_TOKENS)
 
 # -----------------------------
-# FAQ helpers (DB-backed keyword matcher)
+# FAQ helpers 
 # -----------------------------
 STOP = {
     "the","a","an","and","or","to","for","of","in","on","is","are","i","my","me","it",
@@ -89,11 +89,11 @@ def answer_faq_from_db(query: str) -> tuple[str, str] | None:
             best, best_score = f, score
 
     if best and best_score >= 1.0:
-        return best["answer"], best["question"]  # question doubles as issue label
+        return best["answer"], best["question"]  
     return None
 
 # -----------------------------
-# Intent detection (rules, no RAG)
+# Intent detection
 # -----------------------------
 def detect_intent(text: str) -> DetectedIntent:
     t = text.lower()
@@ -154,11 +154,11 @@ def detect_intent(text: str) -> DetectedIntent:
     if any(k in t for k in FAQ_TRIGGERS):
         return DetectedIntent("faq", order_id, None)
 
-    # --- Fallback ---
+    
     return DetectedIntent("fallback", order_id, None)
 
 # -----------------------------
-# Simple inline FAQ fallback (backup)
+# Simple inline FAQ fallback 
 # -----------------------------
 def answer_faq(question: str) -> str:
     t = question.lower()
@@ -243,7 +243,7 @@ def chat_turn(session_id: str, user_text: str, email: str | None = None, name: s
             facts.pop("pending_ticket_offer", None)
             return "Okay, I won’t raise a ticket. Anything else I can help with?", None
 
-        # Treat "yes" OR supplying an ORDL as acceptance
+        # Treat "yes" 
         if _is_yes(t) or facts.get("order_id"):
             # Need customer id to create a ticket
             customer_id = facts.get("customer_id")
@@ -269,8 +269,8 @@ def chat_turn(session_id: str, user_text: str, email: str | None = None, name: s
             ticket_id = create_ticket(
                 customer_id=customer_id,
                 order_id=order_id,
-                issue_type=issue_type,      # from pending["issue_type"]
-                first_msg=first_msg,        # from pending["first_msg"]
+                issue_type=issue_type,   
+                first_msg=first_msg,       
                 source="chat"
             )
 
@@ -285,7 +285,7 @@ def chat_turn(session_id: str, user_text: str, email: str | None = None, name: s
         return "If you’d like me to raise a ticket, say **yes** or share your ORDL Order ID.", None
 
     # ---------------------------------------------------
-    # Try DB-backed FAQ auto-answer first (unless clearly ticketable)
+    # Try DB-backed FAQ auto-answer first
     # ---------------------------------------------------
     faq_res = answer_faq_from_db(user_text)
     if faq_res and intent.type not in ("defect", "wrong_item", "missing_item"):
@@ -294,7 +294,7 @@ def chat_turn(session_id: str, user_text: str, email: str | None = None, name: s
         return ans + "\n\nWould you like me to raise a support ticket for this? (yes/no)", None
 
     # ---------------------------------------------------
-    # Bridge: user sent only an Order ID — ask open-ended (don’t force only defect/wrong)
+    # Bridge: user sent only an Order ID — ask open-ended 
     # ---------------------------------------------------
     PAYMENT_WORDS = ("payment","paid","debited","charged","refund","transaction","failed")
     MISSING_WORDS = ("missing","not received","not delivered","partial")
@@ -308,7 +308,7 @@ def chat_turn(session_id: str, user_text: str, email: str | None = None, name: s
         ), None
 
     # ---------------------------------------------------
-    # Ensure we have a customer id (only when we might create/append tickets)
+    # Ensure we have a customer id 
     # ---------------------------------------------------
     customer_id = facts.get("customer_id")
     if not customer_id:
@@ -316,7 +316,7 @@ def chat_turn(session_id: str, user_text: str, email: str | None = None, name: s
         facts["customer_id"] = customer_id
 
     # ---------------------------------------------------
-    # FAQ branch (rule-based backup if DB didn’t match)
+    # FAQ branch 
     # ---------------------------------------------------
     if intent.type == "faq":
         reply = answer_faq(user_text)
@@ -325,7 +325,7 @@ def chat_turn(session_id: str, user_text: str, email: str | None = None, name: s
         return reply + "\n\nWould you like me to raise a support ticket for this? (yes/no)", None
 
     # ---------------------------------------------------
-    # Ticketable issues (create for ANY of these without asking)
+    # Ticketable issues 
     # ---------------------------------------------------
     if intent.type in ("defect", "wrong_item", "missing_item"):
         issue_type = (
