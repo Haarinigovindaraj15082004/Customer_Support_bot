@@ -1,3 +1,4 @@
+# agent.py
 import re
 from functools import lru_cache
 from typing import Dict, Tuple
@@ -7,18 +8,19 @@ from ticketing import (
     get_or_create_customer, create_ticket, append_message,
     find_open_ticket_by_order
 )
-from db import get_conn
+from db import get_conn, get_order_status
+from policy import normalize_issue, is_allowed
 
 # -----------------------------
-# Session cache 
+# Session cache
 # -----------------------------
 SESSION_CACHE: Dict[str, Dict] = {}
 
 # -----------------------------
 # Order ID extraction (ORDL…)
 # -----------------------------
-ORDER_ID_RE = re.compile(r"(order[ _-]?id[: ]*)(ORDL[0-9A-Z-]{3,})", re.I)
-ORDER_TOKEN_RE = re.compile(r"\b(ORDL[0-9A-Z-]{3,})\b", re.I)
+ORDER_ID_RE    = re.compile(r"(order[ _-]?id[: ]*)(ORDL-?\d+|\d+)", re.I)
+ORDER_TOKEN_RE = re.compile(r"\b(ORDL-?\d+)\b", re.I)
 
 # -----------------------------
 # Yes/No helpers for ticket offer
@@ -38,7 +40,7 @@ def _is_no(text: str) -> bool:
     return any(tok in t for tok in NO_TOKENS)
 
 # -----------------------------
-# FAQ helpers 
+# FAQ helpers
 # -----------------------------
 STOP = {
     "the","a","an","and","or","to","for","of","in","on","is","are","i","my","me","it",
@@ -52,7 +54,7 @@ def _tokens(text: str):
 def _load_faqs():
     """
     Load FAQs once (id, question, answer, keywords CSV) from the DB.
-    Make sure your 'faq' table has a 'keywords' TEXT column.
+    Ensure your 'faq' table has a 'keywords' TEXT column.
     """
     with get_conn() as conn:
         rows = conn.execute(
@@ -89,7 +91,7 @@ def answer_faq_from_db(query: str) -> tuple[str, str] | None:
             best, best_score = f, score
 
     if best and best_score >= 1.0:
-        return best["answer"], best["question"]  
+        return best["answer"], best["question"]  # (answer, label)
     return None
 
 # -----------------------------
@@ -136,7 +138,7 @@ def detect_intent(text: str) -> DetectedIntent:
     ):
         return DetectedIntent("missing_item", order_id, "Missing/partial delivery")
 
-    # --- FAQ triggers (broad guard so detect_intent() can route FAQs too) ---
+    # --- FAQ triggers ---
     FAQ_TRIGGERS = (
         "return policy", "return", "exchange",
         "refund",
@@ -154,11 +156,10 @@ def detect_intent(text: str) -> DetectedIntent:
     if any(k in t for k in FAQ_TRIGGERS):
         return DetectedIntent("faq", order_id, None)
 
-    
     return DetectedIntent("fallback", order_id, None)
 
 # -----------------------------
-# Simple inline FAQ fallback 
+# Simple inline FAQ fallback (text only)
 # -----------------------------
 def answer_faq(question: str) -> str:
     t = question.lower()
@@ -222,6 +223,12 @@ def answer_faq(question: str) -> str:
 def chat_turn(session_id: str, user_text: str, email: str | None = None, name: str | None = None) -> Tuple[str, int | None]:
     """
     Returns (assistant_reply, ticket_id_or_None)
+
+    Flow (per requirement):
+      1) Answer FAQ.
+      2) Offer ticket (yes/no) WITHOUT asking Order ID yet.
+      3) If YES, ask for Order ID (if missing).
+      4) When Order ID is present, check status+policy and create/append ticket.
     """
     session = SESSION_CACHE.setdefault(session_id, {"facts": {}})
     facts = session["facts"]
@@ -234,67 +241,81 @@ def chat_turn(session_id: str, user_text: str, email: str | None = None, name: s
         facts["order_id"] = intent.order_id
 
     # ---------------------------------------------------
-    # Pending: user was asked "Do you want a ticket?"
+    # Pending YES/NO flow
     # ---------------------------------------------------
     pending = facts.get("pending_ticket_offer")  # dict with keys: issue_type, first_msg
     if pending:
-        # User declines
+        # Decline
         if _is_no(t):
             facts.pop("pending_ticket_offer", None)
             return "Okay, I won’t raise a ticket. Anything else I can help with?", None
 
-        # Treat "yes" 
-        if _is_yes(t) or facts.get("order_id"):
-            # Need customer id to create a ticket
+        order_id = facts.get("order_id")
+
+        # YES but no Order ID yet → ask for it
+        if _is_yes(t) and not order_id:
+            return "Sure—please share your Order ID (starts with ORDL) to raise the ticket.", None
+
+        # If an Order ID is present (with or without explicit YES), proceed to gate+create
+        if order_id:
+            # Ensure we have a customer id
             customer_id = facts.get("customer_id")
             if not customer_id:
                 customer_id = get_or_create_customer(email=email, name=name)
                 facts["customer_id"] = customer_id
 
-            # Ensure we have order id
-            order_id = facts.get("order_id")
-            if not order_id:
-                return "Sure—please share your Order ID (starts with ORDL) to raise the ticket.", None
+            # Gate by status & policy
+            status = get_order_status(order_id)
+            if not status:
+                return f"I couldn’t find {order_id}. Please double-check the Order ID.", None
 
-            # Reuse open ticket for same order
+            facts["order_status"] = status
+            issue_code = (pending.get("issue_type") or "OTHER").upper()
+
+            if not is_allowed(issue_code, status):
+                facts.pop("pending_ticket_offer", None)
+                pretty = issue_code.replace("_", " ").lower()
+                return (f"Order {order_id} is **{status}**. "
+                        f"Sorry, *{pretty}* isn’t available at this stage. "
+                        f"Would you like alternatives or to talk to a human?"), None
+
+            # Reuse open ticket
             existing = find_open_ticket_by_order(customer_id, order_id)
             if existing:
                 append_message(existing, "user", pending.get("first_msg","(no message)"))
                 facts.pop("pending_ticket_offer", None)
                 return f"Got it. I’ve added this to your existing ticket #{existing} for Order {order_id}.", existing
 
-            # Create the ticket for ANY issue
-            issue_type = pending.get("issue_type") or "other"
+            # Create the ticket now
             first_msg = pending.get("first_msg") or user_text
             ticket_id = create_ticket(
                 customer_id=customer_id,
                 order_id=order_id,
-                issue_type=issue_type,   
-                first_msg=first_msg,       
+                issue_type=issue_code,
+                first_msg=first_msg,
                 source="chat"
             )
-
             facts.pop("pending_ticket_offer", None)
-            reply = (
-                f"Thanks! I’ve created ticket #{ticket_id} for Order {order_id}. "
-                f"Our team will reach out with next steps."
-            )
-            return reply, ticket_id
+            return (f"Thanks! I’ve created ticket #{ticket_id} for Order {order_id}. "
+                    f"Our team will reach out with next steps."), ticket_id
 
-        # Neither yes/no nor order id → gently remind
-        return "If you’d like me to raise a ticket, say **yes** or share your ORDL Order ID.", None
+        # Neither explicit yes nor an order id → re-prompt the yes/no
+        return "Would you like me to raise a support ticket for this? (yes/no)", None
 
     # ---------------------------------------------------
-    # Try DB-backed FAQ auto-answer first
+    # DB-backed FAQ: ANSWER → OFFER (no Order ID yet)
     # ---------------------------------------------------
     faq_res = answer_faq_from_db(user_text)
     if faq_res and intent.type not in ("defect", "wrong_item", "missing_item"):
-        ans, label = faq_res  # label like "payment issues", "order tracking", etc.
-        facts["pending_ticket_offer"] = {"issue_type": label, "first_msg": user_text}
+        ans, label = faq_res
+        facts["pending_ticket_offer"] = {
+            "issue_type": normalize_issue(label),
+            "first_msg": user_text
+        }
         return ans + "\n\nWould you like me to raise a support ticket for this? (yes/no)", None
 
     # ---------------------------------------------------
-    # Bridge: user sent only an Order ID — ask open-ended 
+    # Bridge: user sent only an Order ID — ask issue
     # ---------------------------------------------------
     PAYMENT_WORDS = ("payment","paid","debited","charged","refund","transaction","failed")
     MISSING_WORDS = ("missing","not received","not delivered","partial")
@@ -308,7 +329,7 @@ def chat_turn(session_id: str, user_text: str, email: str | None = None, name: s
         ), None
 
     # ---------------------------------------------------
-    # Ensure we have a customer id 
+    # Ensure we have a customer id (handy later)
     # ---------------------------------------------------
     customer_id = facts.get("customer_id")
     if not customer_id:
@@ -316,49 +337,31 @@ def chat_turn(session_id: str, user_text: str, email: str | None = None, name: s
         facts["customer_id"] = customer_id
 
     # ---------------------------------------------------
-    # FAQ branch 
+    # Inline FAQ: ANSWER → OFFER (no Order ID yet)
     # ---------------------------------------------------
     if intent.type == "faq":
         reply = answer_faq(user_text)
-        label = infer_issue_label_from_text(user_text)   # <- get a meaningful issue label
-        facts["pending_ticket_offer"] = {"issue_type": label, "first_msg": user_text}
+        label = infer_issue_label_from_text(user_text)
+        facts["pending_ticket_offer"] = {
+            "issue_type": normalize_issue(label),
+            "first_msg": user_text
+        }
         return reply + "\n\nWould you like me to raise a support ticket for this? (yes/no)", None
 
     # ---------------------------------------------------
-    # Ticketable issues 
+    # Ticketable issues (defect / wrong / missing): OFFER first
     # ---------------------------------------------------
     if intent.type in ("defect", "wrong_item", "missing_item"):
-        issue_type = (
-            "defective_item" if intent.type == "defect"
-            else "wrong_item" if intent.type == "wrong_item"
-            else "missing_item"
+        issue_code = (
+            "DEFECTIVE_ITEM" if intent.type == "defect"
+            else "WRONG_ITEM" if intent.type == "wrong_item"
+            else "MISSING_ITEM"
         )
-
-        order_id = facts.get("order_id")
-        if not order_id:
-            return "Please share your Order ID (starts with ORDL), e.g., ORDL12345.", None
-
-        # Reuse open ticket if same order
-        existing = find_open_ticket_by_order(customer_id, order_id)
-        if existing:
-            append_message(existing, "user", user_text)
-            ack = f"Got it. I’ve added this to your existing ticket #{existing} for Order {order_id}."
-            return ack, existing
-
-        # Create a new ticket
-        ticket_id = create_ticket(
-        customer_id=customer_id,
-        order_id=order_id,
-        issue_type=issue_type,
-        first_msg=user_text,
-        source="chat"
-        )
-
-        reply = (
-            f"Thanks! I’ve created ticket #{ticket_id} for Order {order_id}. "
-            f"Our team will reach out with next steps."
-        )
-        return reply, ticket_id
+        facts["pending_ticket_offer"] = {
+            "issue_type": issue_code,
+            "first_msg": user_text
+        }
+        return "I can help with that. Would you like me to raise a support ticket for this? (yes/no)", None
 
     # ---------------------------------------------------
     # Fallback nudges
@@ -368,7 +371,7 @@ def chat_turn(session_id: str, user_text: str, email: str | None = None, name: s
 
     return ("I can answer questions (payment, returns, delivery, tracking, etc.) and raise tickets for any issue. "
             "Tell me your issue, and if it’s about a specific order, share the Order ID (e.g., ORDL12345)."), None
-    
+
 def infer_issue_label_from_text(t: str) -> str:
     t = t.lower()
     if "payment" in t or "debited" in t or "charged" in t or "transaction" in t:
@@ -398,4 +401,3 @@ def infer_issue_label_from_text(t: str) -> str:
     if "damaged" in t or "broken" in t:
         return "damaged in transit"
     return "other"
-

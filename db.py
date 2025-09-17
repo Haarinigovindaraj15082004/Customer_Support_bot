@@ -1,6 +1,6 @@
 import sqlite3
 from contextlib import contextmanager
-from typing import Iterator
+from typing import Iterator, Optional
 from config import settings
 
 @contextmanager
@@ -17,7 +17,7 @@ def init_db():
     with get_conn() as conn:
         c = conn.cursor()
 
-        # Users who contact support (email optional for chat users)
+        # Users who contact support 
         c.execute("""
         CREATE TABLE IF NOT EXISTS customers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,7 +38,7 @@ def init_db():
             last_message TEXT,
             FOREIGN KEY (customer_id) REFERENCES customers(id)
         )""")
-        
+
         # --- add email metadata columns if missing ---
         c.execute("PRAGMA table_info(tickets)")
         tcols = {r["name"] for r in c.fetchall()}
@@ -46,16 +46,15 @@ def init_db():
             if col not in tcols:
                 c.execute(f"ALTER TABLE tickets ADD COLUMN {col} {sql_type}")
 
-        add("source", "TEXT")                 
-        add("gmail_message_id", "TEXT")       
+        add("source", "TEXT")
+        add("gmail_message_id", "TEXT")
         add("email_from", "TEXT")
         add("email_subject", "TEXT")
-        add("email_fetched_utc", "TEXT")      
-        add("email_ack_sent_utc", "TEXT")     
-        add("gmail_was_unread", "INTEGER")    
+        add("email_fetched_utc", "TEXT")
+        add("email_ack_sent_utc", "TEXT")
+        add("gmail_was_unread", "INTEGER")
 
-
-        # Simple chat transcripts
+        # chat transcripts
         c.execute("""
         CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,15 +65,15 @@ def init_db():
             FOREIGN KEY (ticket_id) REFERENCES tickets(id)
         )""")
 
-        # Lightweight FAQ for rule-based answers 
+        # FAQ for rule-based answers
         c.execute("""
         CREATE TABLE IF NOT EXISTS faq (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             question TEXT,
             answer TEXT
         )""")
-        
-        # ensure 'keywords' column exists 
+
+        # keywords' column 
         c.execute("PRAGMA table_info(faq)")
         cols = [r["name"] for r in c.fetchall()]
         if "keywords" not in cols:
@@ -91,4 +90,22 @@ def init_db():
                 ],
             )
 
+        # -------------
+        # Orders table 
+        # -------------
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS orders (
+            order_id TEXT PRIMARY KEY,
+            status   TEXT,                  -- e.g. NEW, PAYMENT_PENDING, PACKING, SHIPPED, OUT_FOR_DELIVERY, DELIVERED, CANCELLED
+            shipping_address TEXT,
+            created_utc TEXT DEFAULT (datetime('now'))
+        )""")
+
         conn.commit()
+
+def get_order_status(order_id: str) -> Optional[str]:
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT status FROM orders WHERE order_id = ?", (order_id,))
+        row = cur.fetchone()
+        return row["status"] if row else None
