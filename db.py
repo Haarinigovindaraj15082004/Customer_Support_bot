@@ -17,7 +17,6 @@ def init_db():
     with get_conn() as conn:
         c = conn.cursor()
 
-        # Users who contact support 
         c.execute("""
         CREATE TABLE IF NOT EXISTS customers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -25,7 +24,6 @@ def init_db():
             name TEXT
         )""")
 
-        # Tickets table
         c.execute("""
         CREATE TABLE IF NOT EXISTS tickets (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -39,7 +37,7 @@ def init_db():
             FOREIGN KEY (customer_id) REFERENCES customers(id)
         )""")
 
-        # --- add email metadata columns if missing ---
+       
         c.execute("PRAGMA table_info(tickets)")
         tcols = {r["name"] for r in c.fetchall()}
         def add(col, sql_type):
@@ -54,7 +52,6 @@ def init_db():
         add("email_ack_sent_utc", "TEXT")
         add("gmail_was_unread", "INTEGER")
 
-        # chat transcripts
         c.execute("""
         CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,7 +62,6 @@ def init_db():
             FOREIGN KEY (ticket_id) REFERENCES tickets(id)
         )""")
 
-        # FAQ for rule-based answers
         c.execute("""
         CREATE TABLE IF NOT EXISTS faq (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,13 +69,11 @@ def init_db():
             answer TEXT
         )""")
 
-        # keywords' column 
         c.execute("PRAGMA table_info(faq)")
         cols = [r["name"] for r in c.fetchall()]
         if "keywords" not in cols:
             c.execute("ALTER TABLE faq ADD COLUMN keywords TEXT")
 
-        # Seed a couple of FAQs if empty
         c.execute("SELECT COUNT(*) as n FROM faq")
         if c.fetchone()["n"] == 0:
             c.executemany(

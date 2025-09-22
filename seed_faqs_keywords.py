@@ -1,7 +1,6 @@
 from db import get_conn
 
 FAQS = [
-    # (question, answer, keywords CSV)
     ("return policy",
      "Returns: 30 days if unused and in original packaging. Exchanges subject to stock.",
      "return, returns, exchange, replace, replacement, exchange policy"),

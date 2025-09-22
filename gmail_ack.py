@@ -61,7 +61,6 @@ def _parse_email(msg) -> tuple[str, str, str]:
     body_text = "(no body)"
     payload = msg.get("payload", {})
     if "parts" in payload:
-        # try find a text
         for part in payload["parts"]:
             if part.get("mimeType") == "text/plain":
                 data = part["body"].get("data")
@@ -122,22 +121,19 @@ def poll_and_ack():
                     userId="me", id=m["id"], format="full"
                 ).execute()
 
-                # basic fields
                 from_header, subject, body_text = _parse_email(full)
                 from_addr = from_header.split("<")[-1].rstrip(">").strip()
                 was_unread = "UNREAD" in full.get("labelIds", [])
-
-                # classify the email text
                 text = f"{subject}\n{body_text}"
                 intent = detect_intent(text)
-
-                # choose issue_type 
                 if intent.type == "defect":
                     issue_type = "defective_item"
                 elif intent.type == "wrong_item":
                     issue_type = "wrong_item"
                 elif intent.type == "missing_item":
                     issue_type = "missing_item"
+                elif intent.type == "human":
+                    issue_type = "human assistance"  
                 else:
                     match = answer_faq_from_db(text)  
                     if match:
@@ -145,7 +141,6 @@ def poll_and_ack():
                     else:
                         issue_type = infer_issue_label_from_text(text)
 
-                # create / link customer and ticket
                 customer_id = get_or_create_customer(email=from_addr)
                 ticket_id = create_ticket(
                     customer_id=customer_id,
@@ -155,10 +150,8 @@ def poll_and_ack():
                     source="email"
                 )
 
-                # send ack
                 send_acknowledgment(service, from_addr, ticket_id, intent.order_id)
 
-                # save email metadata on the ticket
                 now_ist = datetime.now(ZoneInfo("Asia/Kolkata")).isoformat(timespec="seconds")
                 set_ticket_email_meta(
                 ticket_id,
@@ -171,7 +164,6 @@ def poll_and_ack():
                 gmail_was_unread=1 if was_unread else 0
                 )
 
-                # mark as read
                 service.users().messages().modify(
                     userId="me",
                     id=m["id"],

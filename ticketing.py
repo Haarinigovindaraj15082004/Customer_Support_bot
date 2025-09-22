@@ -33,7 +33,6 @@ def get_or_create_customer(email: Optional[str], name: Optional[str] = None) -> 
             c.execute("INSERT INTO customers(email, name) VALUES(?,?)", (email, name))
             return c.lastrowid
         else:
-            # Anonymous chat customer
             c.execute("INSERT INTO customers(email, name) VALUES(?,?)", (None, name))
             return c.lastrowid
 

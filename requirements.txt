@@ -1,22 +1,16 @@
-# Cassie (chat + Gmail auto-ack)
 # Python 3.10+
 
-# Gmail API + OAuth
 google-api-python-client>=2.120.0
 google-auth-httplib2>=0.2.0
 google-auth-oauthlib>=1.2.0
 
-# Config via .env (Pydantic v2)
 pydantic>=2.6.0
 pydantic-settings>=2.2.0
 
 
 Flask>=3.0.0
 
-# Optional dev tools (uncomment if you want them)
-# pytest>=8.0.0
-# black>=24.0.0
-# mypy>=1.10.0
-
-# Compatibility helper for older Python (<3.11)
 typing-extensions>=4.8.0; python_version < "3.11"
+
+groq>=0.10.0
+
