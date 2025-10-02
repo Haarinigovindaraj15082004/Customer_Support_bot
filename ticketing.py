@@ -1,7 +1,8 @@
 from typing import Optional
 from db import get_conn
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
+
 
 def set_ticket_email_meta(ticket_id: int, **meta) -> None:
     """
@@ -91,3 +92,58 @@ def set_status(ticket_id: int, status: str) -> None:
         c = conn.cursor()
         c.execute("UPDATE tickets SET status = ?, updated_utc = datetime('now') WHERE id = ?",
                   (status, ticket_id))
+
+def utc_now_iso():
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+def set_waiting_on_customer(ticket_id: int, flag: bool):
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE tickets SET waiting_on_customer=?, updated_utc=? WHERE id=?",
+            (1 if flag else 0, utc_now_iso(), ticket_id)
+        )
+
+def set_last_customer_msg(ticket_id: int):
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE tickets SET last_customer_msg_utc=?, updated_utc=? WHERE id=?",
+            (utc_now_iso(), utc_now_iso(), ticket_id)
+        )
+
+def set_last_bot_msg(ticket_id: int):
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE tickets SET last_bot_msg_utc=?, updated_utc=? WHERE id=?",
+            (utc_now_iso(), utc_now_iso(), ticket_id)
+        )
+
+def mark_first_response_if_needed(ticket_id: int):
+    with get_conn() as conn:
+        row = conn.execute("SELECT first_response_utc FROM tickets WHERE id=?", (ticket_id,)).fetchone()
+        if row and not row["first_response_utc"]:
+            conn.execute(
+                "UPDATE tickets SET first_response_utc=?, updated_utc=? WHERE id=?",
+                (utc_now_iso(), utc_now_iso(), ticket_id)
+            )
+
+def mark_resolved_time(ticket_id: int):
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE tickets SET resolved_utc=?, updated_utc=? WHERE id=?",
+            (utc_now_iso(), utc_now_iso(), ticket_id)
+        )
+
+def mark_escalated(ticket_id: int, yes: bool = True):
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE tickets SET escalated=?, updated_utc=? WHERE id=?",
+            (1 if yes else 0, utc_now_iso(), ticket_id)
+        )
+
+def find_ticket_by_subject_tag(subject: str) -> int | None:
+    # Detect "[Ticket #123]" in subject
+    import re
+    m = re.search(r"\[Ticket\s*#(\d+)\]", subject or "", re.I)
+    if not m:
+        return None
+    return int(m.group(1))
