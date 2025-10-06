@@ -5,10 +5,10 @@ from typing import Tuple, Optional
 from flask import Flask, request, jsonify
 from zoneinfo import ZoneInfo
 from config import settings
-from db import (init_db, get_conn,report_summary, utc_range_for,)
-from agent import (chat_turn,compose_comment_reply,refresh_faq_cache,)
+from db import (init_db, get_conn, report_summary, utc_range_for,)
+from agent import (chat_turn, compose_comment_reply, refresh_faq_cache,)
 from llm import classify, generate_manual_md, extract_manual_section
-from manual import upsert_manual, get_manual, get_manual_fuzzy
+from manual import upsert_manual, get_manual, get_manual_fuzzy, _facts_to_markdown  # use facts→markdown when needed
 from ticketing import get_ticket, set_status, get_or_create_customer, create_ticket, append_message, find_open_ticket_by_order
 from policy import normalize_issue
 
@@ -197,7 +197,7 @@ def ingest_message():
     user = data.get("user") or {}
     user_email = (user.get("email") or "").strip()
     user_name = (user.get("name") or "").strip()
-    text = (data.get("text") or "").strip()
+    text = (user.get("text") or data.get("text") or "").strip()
     order_id = (data.get("order_id") or "").strip() or None
     issue_type = (data.get("issue_type") or "").strip() or None
     thread = data.get("thread") or {}
@@ -350,6 +350,12 @@ def faq_upsert():
 
 @app.post("/manual/generate")
 def manual_generate():
+    """
+    Generate and store a manual section.
+    - Keeps your original LLM pipeline (generate_manual_md + extract_manual_section).
+    - If LLM returns an empty/placeholder section and 'facts' are provided, we render
+      markdown from facts so the DB stores real content instead of "Not specified".
+    """
     data = request.get_json(silent=True) or {}
     product = (data.get("product") or "").strip()
     if not product:
@@ -358,8 +364,17 @@ def manual_generate():
     facts   = data.get("facts") or {}
     section = (data.get("section") or "full").lower()
 
+    # Original flow
     md  = generate_manual_md(product, facts)
     out = extract_manual_section(md, section)
+
+    # If LLM gave placeholder and we do have facts, render from facts
+    if (not out) or re.search(r"(?i)\bnot\s*specified\b", out or ""):
+        if facts:
+            out = _facts_to_markdown(section, facts)
+        else:
+            # keep previous behavior if no facts
+            out = out or f"## {section.replace('_',' ').title()}\nNot specified"
 
     manual_id = upsert_manual(product, section, out, facts=facts)
 
@@ -369,7 +384,6 @@ def manual_generate():
         "markdown": out,
         "id": manual_id
     })
-
 
 @app.get("/manual/get")
 def manual_get():
@@ -384,5 +398,5 @@ def manual_get():
     return jsonify({"product": product, "section": section, "markdown": md})
 
 if __name__ == "__main__":
-    init_db()  
+    init_db()
     app.run(host="127.0.0.1", port=5000, debug=True)

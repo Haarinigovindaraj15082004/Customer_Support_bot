@@ -14,15 +14,49 @@ def _has_column(table: str, col: str) -> bool:
         rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
     return any((r["name"] == col) for r in rows)
 
+# Placeholder detector used when LLM gives empty/boilerplate text
+_PLACEHOLDER_PAT = re.compile(r"(?i)\bnot\s*specified\b")
+
+def _is_placeholder(md: Optional[str]) -> bool:
+    if not md:
+        return True
+    body = md.strip()
+    return (not body) or bool(_PLACEHOLDER_PAT.search(body))
+
+def _facts_to_markdown(section: str, facts: dict) -> str:
+    """
+    Render arbitrary facts into a clean, section-specific markdown block.
+    Works for electronics, bottles, apparel—anything.
+    """
+    title = (section or "details").replace("_", " ").title()
+    lines = [f"## {title}"]
+    for k, v in (facts or {}).items():
+        if v is None:
+            continue
+        key = str(k).replace("_", " ").strip().title()
+        val = str(v).strip()
+        if not val:
+            continue
+        lines.append(f"- **{key}:** {val}")
+    # If nothing materialized, keep a minimal non-placeholder header
+    return "\n".join(lines) if len(lines) > 1 else f"## {title}\n(No details provided)"
+
 # ------------ persistence API ------------
 
 def upsert_manual(product: str, section: str, markdown: str, facts: dict | None = None) -> int:
     """
     UPSERT (product, section) -> markdown. Returns row id.
     Works with schemas both WITH and WITHOUT the facts_json/updated_utc columns.
+
+    IMPORTANT: If 'markdown' is empty/placeholder and 'facts' exist, we render markdown from facts
+    (without altering any of your existing logic paths otherwise).
     """
     p = _slug(product)
     s = _slug(section)
+
+    # Prefer facts -> markdown when LLM gave us a placeholder
+    if _is_placeholder(markdown) and facts:
+        markdown = _facts_to_markdown(section, facts)
 
     facts_json = json.dumps(facts or {}, ensure_ascii=False)
     has_facts_col = _has_column("manual", "facts_json")
